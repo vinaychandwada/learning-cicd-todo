@@ -13,7 +13,7 @@ module.exports = {
     {
       name: 'todo-frontend',
       cwd: './react',
-      script: 'serve',
+      script: '/usr/bin/serve',
       args: '-s dist -l 5173',
       interpreter: 'none',
       autorestart: true,
