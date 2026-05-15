@@ -1,0 +1,81 @@
+name: CI/CD Pipeline
+
+# What triggers this workflow
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}  # lets you run it manually from the Actions tab
+
+# Cancel an older run if a newer push happens on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------
+  # JOB 1: Build & type-check (runs in GitHub's cloud)
+  # ----------------------------------------------------------
+  build-test:
+    name: Build & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            node/package-lock.json
+            react/package-lock.json
+
+      # ---- Backend ----
+      - name: Backend - install
+        working-directory: node
+        run: npm ci
+
+      - name: Backend - type-check
+        working-directory: node
+        run: npm run typecheck
+
+      - name: Backend - build
+        working-directory: node
+        run: npm run build
+
+      # ---- Frontend ----
+      - name: Frontend - install
+        working-directory: react
+        run: npm ci
+
+      - name: Frontend - type-check
+        working-directory: react
+        run: npm run typecheck
+
+      - name: Frontend - build
+        working-directory: react
+        run: npm run build
+
+  # ----------------------------------------------------------
+  # JOB 2: Deploy to your local machine via self-hosted runner
+  # ----------------------------------------------------------
+  deploy:
+    name: Deploy to local machine
+    needs: build-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Run deploy script
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRES_IN: ${{ secrets.JWT_EXPIRES_IN }}
+          BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
+        run: bash deploy/deploy.sh
