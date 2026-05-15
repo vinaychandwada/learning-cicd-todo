@@ -6,7 +6,8 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "strict": true,
-    "noEmit": true
+    "emitDeclarationOnly": true,
+    "declarationDir": "./node_modules/.cache/tsc-node"
   },
   "include": ["vite.config.ts"]
 }
