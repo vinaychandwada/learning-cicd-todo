@@ -1,0 +1,28 @@
+# Node / build outputs
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# PM2 runtime files
+.pm2/
+
+# GitHub Actions self-hosted runner (we'll install this later)
+actions-runner/
+
+# Local-only Claude files
+.claude/
