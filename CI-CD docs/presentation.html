@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CI/CD Pipeline — From git push to live</title>
+<style>
+  /* ==========================================================
+     RESET + BASE
+     ========================================================== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: radial-gradient(ellipse at top, #1a1f3a 0%, #0a0e27 60%, #050714 100%);
+    color: #e5e7eb;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  /* ==========================================================
+     PROGRESS BAR
+     ========================================================== */
+  .progress-bar {
+    position: fixed; top: 0; left: 0;
+    height: 4px; width: 0%;
+    background: linear-gradient(90deg, #4f46e5, #06b6d4, #10b981);
+    z-index: 100;
+    transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow: 0 0 10px rgba(79, 70, 229, 0.5);
+  }
+
+  /* ==========================================================
+     SLIDE COUNTER
+     ========================================================== */
+  .slide-counter {
+    position: fixed; bottom: 20px; right: 24px;
+    background: rgba(19, 25, 50, 0.85);
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    color: #94a3b8;
+    z-index: 50;
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.08);
+    font-variant-numeric: tabular-nums;
+  }
+  .slide-counter .current { color: #06b6d4; font-weight: 600; }
+
+  /* ==========================================================
+     NAV CONTROLS
+     ========================================================== */
+  .controls {
+    position: fixed; bottom: 20px; left: 24px;
+    display: flex; gap: 8px;
+    z-index: 50;
+  }
+  .controls button {
+    background: rgba(19, 25, 50, 0.85);
+    color: #e5e7eb;
+    border: 1px solid rgba(255,255,255,0.08);
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.2s;
+    backdrop-filter: blur(8px);
+  }
+  .controls button:hover {
+    background: #4f46e5;
+    border-color: #4f46e5;
+    transform: translateY(-2px);
+  }
+  .controls button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .hint {
+    position: fixed; top: 20px; right: 24px;
+    font-size: 0.75rem;
+    color: #64748b;
+    z-index: 50;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+
+  /* ==========================================================
+     SLIDES
+     ========================================================== */
+  .presentation {
+    height: 100vh;
+    position: relative;
+  }
+  .slide {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    padding: 4vh 6vw;
+    opacity: 0;
+    transform: translateY(40px) scale(0.98);
+    transition: opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+                transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+    overflow-y: auto;
+  }
+  .slide.active {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+  .slide.prev { transform: translateY(-40px) scale(0.98); }
+
+  .slide-inner {
+    width: 100%;
+    max-width: 1100px;
+    margin: auto;
+  }
+
+  /* Step entry animations for child elements */
+  .slide.active .stagger > * {
+    animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .slide.active .stagger > *:nth-child(1) { animation-delay: 0.1s; }
+  .slide.active .stagger > *:nth-child(2) { animation-delay: 0.2s; }
+  .slide.active .stagger > *:nth-child(3) { animation-delay: 0.3s; }
+  .slide.active .stagger > *:nth-child(4) { animation-delay: 0.4s; }
+  .slide.active .stagger > *:nth-child(5) { animation-delay: 0.5s; }
+  .slide.active .stagger > *:nth-child(6) { animation-delay: 0.6s; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ==========================================================
+     TYPOGRAPHY
+     ========================================================== */
+  h1 {
+    font-size: clamp(2.4rem, 5vw, 4rem);
+    font-weight: 800;
+    line-height: 1.1;
+    background: linear-gradient(135deg, #ffffff 0%, #94a3b8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 1.5rem;
+    letter-spacing: -0.02em;
+  }
+  h2 {
+    font-size: clamp(1.6rem, 3.5vw, 2.6rem);
+    font-weight: 700;
+    margin-bottom: 1rem;
+    letter-spacing: -0.01em;
+    color: #f3f4f6;
+  }
+  h3 {
+    font-size: clamp(1.1rem, 2vw, 1.4rem);
+    font-weight: 600;
+    color: #cbd5e1;
+    margin-bottom: 0.75rem;
+  }
+  p {
+    font-size: clamp(1rem, 1.4vw, 1.15rem);
+    color: #cbd5e1;
+    margin-bottom: 1rem;
+  }
+  .subtitle {
+    font-size: clamp(1.1rem, 1.7vw, 1.4rem);
+    color: #94a3b8;
+    font-weight: 400;
+    margin-bottom: 2.5rem;
+  }
+  .tag {
+    display: inline-block;
+    padding: 4px 12px;
+    background: linear-gradient(135deg, #4f46e5, #06b6d4);
+    color: white;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1rem;
+  }
+  .accent { color: #06b6d4; }
+  .success { color: #10b981; }
+  .danger { color: #f87171; }
+  .muted { color: #64748b; }
+  strong { color: #f3f4f6; }
+  code {
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    background: rgba(6, 182, 212, 0.1);
+    color: #06b6d4;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+
+  /* ==========================================================
+     CODE BLOCKS
+     ========================================================== */
+  pre {
+    background: #0d1224;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.65;
+    color: #e2e8f0;
+    margin: 1rem 0;
+    position: relative;
+  }
+  pre::before {
+    content: '';
+    position: absolute;
+    top: 12px; left: 16px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 18px 0 0 #f59e0b, 36px 0 0 #10b981;
+  }
+  pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    display: block;
+    margin-top: 1.25rem;
+  }
+  .token-keyword { color: #c084fc; }
+  .token-string { color: #86efac; }
+  .token-comment { color: #64748b; font-style: italic; }
+  .token-fn { color: #facc15; }
+  .token-flag { color: #06b6d4; }
+
+  /* ==========================================================
+     CARDS / GRIDS
+     ========================================================== */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; }
+  @media (max-width: 900px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: rgba(19, 25, 50, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 1.25rem;
+    transition: all 0.3s;
+    backdrop-filter: blur(8px);
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(6, 182, 212, 0.4);
+    box-shadow: 0 12px 30px rgba(6, 182, 212, 0.1);
+  }
+  .card-icon {
+    width: 40px; height: 40px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #4f46e5, #06b6d4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem;
+    color: white;
+    margin-bottom: 0.75rem;
+    font-weight: 700;
+  }
+  .card h4 {
+    font-size: 1.05rem;
+    color: #f3f4f6;
+    margin-bottom: 0.4rem;
+    font-weight: 600;
+  }
+  .card p {
+    font-size: 0.9rem;
+    color: #94a3b8;
+    margin: 0;
+  }
+
+  /* ==========================================================
+     STEP HEADER
+     ========================================================== */
+  .step-header {
+    display: flex; align-items: center; gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .step-num {
+    width: 60px; height: 60px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #4f46e5, #06b6d4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: white;
+    box-shadow: 0 8px 20px rgba(79, 70, 229, 0.4);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 8px 20px rgba(79, 70, 229, 0.4); }
+    50% { box-shadow: 0 8px 30px rgba(79, 70, 229, 0.7); }
+  }
+  .step-meta { flex: 1; }
+  .step-meta .tag { margin: 0 0 0.4rem 0; }
+
+  /* ==========================================================
+     TABLES
+     ========================================================== */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    padding: 0.65rem 0.9rem;
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  th {
+    color: #06b6d4;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+  }
+  td { color: #cbd5e1; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ==========================================================
+     ARCHITECTURE DIAGRAM
+     ========================================================== */
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin: 2rem 0;
+    align-items: center;
+  }
+  .arch-box {
+    background: rgba(19, 25, 50, 0.7);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 1.25rem;
+    text-align: center;
+    position: relative;
+    transition: all 0.3s;
+  }
+  .arch-box.highlight {
+    border-color: #06b6d4;
+    box-shadow: 0 0 30px rgba(6, 182, 212, 0.3);
+  }
+  .arch-box .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #64748b;
+    margin-bottom: 0.5rem;
+  }
+  .arch-box .name {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #f3f4f6;
+    margin-bottom: 0.3rem;
+  }
+  .arch-box .desc {
+    font-size: 0.85rem;
+    color: #94a3b8;
+  }
+  .arrow-row {
+    grid-column: 1 / -1;
+    display: flex; justify-content: center; gap: 8px;
+    color: #06b6d4;
+    font-size: 1.2rem;
+    animation: bob 1.5s ease-in-out infinite;
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+
+  /* ==========================================================
+     FLOW DIAGRAM (animated)
+     ========================================================== */
+  .flow {
+    display: flex; align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 2rem 0;
+    flex-wrap: wrap;
+  }
+  .flow-node {
+    background: linear-gradient(135deg, rgba(79, 70, 229, 0.15), rgba(6, 182, 212, 0.15));
+    border: 1.5px solid rgba(6, 182, 212, 0.4);
+    border-radius: 10px;
+    padding: 0.8rem 1.2rem;
+    font-weight: 600;
+    color: #f3f4f6;
+    text-align: center;
+    min-width: 140px;
+  }
+  .flow-arrow {
+    color: #06b6d4;
+    font-size: 1.5rem;
+    padding: 0 0.6rem;
+    animation: slide-right 1.5s ease-in-out infinite;
+  }
+  @keyframes slide-right {
+    0%, 100% { transform: translateX(0); opacity: 0.7; }
+    50% { transform: translateX(4px); opacity: 1; }
+  }
+
+  /* ==========================================================
+     CHECK / X LISTS
+     ========================================================== */
+  ul.checks { list-style: none; padding: 0; }
+  ul.checks li {
+    padding: 0.5rem 0 0.5rem 2rem;
+    position: relative;
+    color: #cbd5e1;
+    font-size: 1.05rem;
+  }
+  ul.checks li::before {
+    content: '✓';
+    position: absolute;
+    left: 0; top: 0.5rem;
+    width: 22px; height: 22px;
+    background: #10b981;
+    color: white;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem;
+    font-weight: bold;
+  }
+  ul.crosses li::before {
+    content: '✕';
+    background: #ef4444;
+  }
+
+  /* ==========================================================
+     TITLE SLIDE
+     ========================================================== */
+  .title-slide { text-align: center; }
+  .title-slide h1 {
+    font-size: clamp(2.8rem, 6vw, 5rem);
+    animation: fade-up 0.8s 0.2s both;
+  }
+  .title-slide .subtitle { animation: fade-up 0.8s 0.4s both; }
+  .title-slide .author { animation: fade-up 0.8s 0.6s both; color: #64748b; font-size: 0.95rem; margin-top: 2rem; }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .glow-orb {
+    position: absolute;
+    width: 400px; height: 400px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(79, 70, 229, 0.3) 0%, transparent 70%);
+    filter: blur(40px);
+    z-index: -1;
+    animation: float 8s ease-in-out infinite;
+  }
+  .glow-orb:nth-child(2) {
+    background: radial-gradient(circle, rgba(6, 182, 212, 0.3) 0%, transparent 70%);
+    animation-delay: -4s;
+    animation-direction: reverse;
+  }
+  @keyframes float {
+    0%, 100% { transform: translate(-30%, -30%); }
+    50% { transform: translate(30%, 30%); }
+  }
+
+  /* ==========================================================
+     KEYBOARD HINT (initial only)
+     ========================================================== */
+  .keyboard-hint {
+    margin-top: 3rem;
+    display: inline-flex; gap: 8px;
+    color: #64748b;
+    font-size: 0.85rem;
+    animation: fade-up 0.8s 0.8s both;
+  }
+  .key {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-family: monospace;
+    color: #cbd5e1;
+  }
+
+  /* ==========================================================
+     SCROLLBAR
+     ========================================================== */
+  .slide::-webkit-scrollbar { width: 6px; }
+  .slide::-webkit-scrollbar-track { background: transparent; }
+  .slide::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+  /* ==========================================================
+     ENDING SLIDE
+     ========================================================== */
+  .big-emoji {
+    font-size: clamp(4rem, 10vw, 7rem);
+    margin-bottom: 1.5rem;
+    animation: bounce 1.5s ease-in-out infinite;
+  }
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-15px); }
+  }
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progress"></div>
+<div class="slide-counter"><span class="current" id="current">1</span> / <span id="total">25</span></div>
+<div class="hint">← → space</div>
+<div class="controls">
+  <button id="prev" title="Previous (←)">‹</button>
+  <button id="next" title="Next (→)">›</button>
+</div>
+
+<div class="presentation" id="deck">
+
+  <!-- ========================================================
+       SLIDE 1 — TITLE
+       ======================================================== -->
+  <section class="slide active title-slide">
+    <div class="glow-orb"></div>
+    <div class="glow-orb"></div>
+    <div class="slide-inner">
+      <div class="tag">A complete CI/CD walkthrough</div>
+      <h1>From <code style="font-size:0.9em">git push</code><br>to <span class="accent">live in production</span></h1>
+      <p class="subtitle">A full-stack Node.js + React app, auto-deployed by GitHub Actions on every push.</p>
+      <div class="keyboard-hint">
+        <span class="key">←</span> <span class="key">→</span> to navigate
+        <span style="margin: 0 8px;">·</span>
+        <span class="key">F</span> for fullscreen
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 2 — THE PROBLEM
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag">The problem</div>
+      <h2>Manual deployment is painful</h2>
+      <p class="subtitle">Without automation, every release looks like this:</p>
+      <div class="stagger">
+        <div class="card">
+          <h4><span class="danger">❌</span> SSH into the server</h4>
+          <p>Type the password, hope you're on the right box.</p>
+        </div>
+        <div class="card">
+          <h4><span class="danger">❌</span> <code>git pull</code> + <code>npm install</code> + <code>npm run build</code></h4>
+          <p>Repeated for every service. Wait, watch, hope nothing breaks.</p>
+        </div>
+        <div class="card">
+          <h4><span class="danger">❌</span> Manually restart processes</h4>
+          <p>Forget to do it? App still runs old code. Restart the wrong one? Outage.</p>
+        </div>
+        <div class="card">
+          <h4><span class="danger">❌</span> Broken builds reach production</h4>
+          <p>Nothing stopped them. No tests ran. You find out from users.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 3 — THE SOLUTION
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag success">The solution</div>
+      <h2>CI/CD turns one command into a safe deploy</h2>
+      <div class="flow stagger" style="margin: 2.5rem 0;">
+        <div class="flow-node">git push</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node">Build &amp; test</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node">Auto deploy</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node success" style="border-color:#10b981;">✓ Live</div>
+      </div>
+      <div class="grid-2 stagger" style="margin-top: 2rem;">
+        <div class="card">
+          <div class="card-icon">CI</div>
+          <h4>Continuous Integration</h4>
+          <p>Every push is automatically built, type-checked, tested. Failures show up <em>before</em> they ship.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">CD</div>
+          <h4>Continuous Deployment</h4>
+          <p>When CI is green, the latest code is auto-deployed. Humans never log into servers to ship.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 4 — ARCHITECTURE
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag">Architecture</div>
+      <h2>How the pieces fit together</h2>
+      <div class="arch stagger">
+        <div class="arch-box">
+          <div class="label">Developer</div>
+          <div class="name">Your editor</div>
+          <div class="desc"><code>git push</code></div>
+        </div>
+        <div class="arch-box highlight">
+          <div class="label">Cloud</div>
+          <div class="name">GitHub</div>
+          <div class="desc">workflow trigger</div>
+        </div>
+        <div class="arrow-row">↓ ↓ ↓</div>
+        <div class="arch-box">
+          <div class="label">Job 1 — Cloud VM</div>
+          <div class="name">Build &amp; type-check</div>
+          <div class="desc">ubuntu-latest (free)</div>
+        </div>
+        <div class="arch-box highlight">
+          <div class="label">Job 2 — Self-hosted</div>
+          <div class="name">Deploy</div>
+          <div class="desc">your machine, via runner</div>
+        </div>
+        <div class="arrow-row">↓ ↓ ↓</div>
+        <div class="arch-box" style="grid-column: 1 / -1;">
+          <div class="label">Final state</div>
+          <div class="name">PM2 manages backend + frontend</div>
+          <div class="desc">auto-restart on crash · survives reboot · connected to MongoDB</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 5 — TECH STACK
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag">Tech stack</div>
+      <h2>What we'll use, and why</h2>
+      <div class="grid-3 stagger">
+        <div class="card"><div class="card-icon">N</div><h4>Node.js + Express</h4><p>TypeScript backend</p></div>
+        <div class="card"><div class="card-icon">R</div><h4>React + Vite</h4><p>TypeScript frontend</p></div>
+        <div class="card"><div class="card-icon">M</div><h4>MongoDB</h4><p>Local database</p></div>
+        <div class="card"><div class="card-icon">G</div><h4>GitHub Actions</h4><p>Pipeline orchestrator</p></div>
+        <div class="card"><div class="card-icon">P</div><h4>PM2</h4><p>Node process manager</p></div>
+        <div class="card"><div class="card-icon">S</div><h4>systemd</h4><p>Auto-start on boot</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 6 — ROADMAP
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag">The plan</div>
+      <h2>15 steps from zero to live</h2>
+      <div class="grid-4 stagger" style="margin-top: 1.5rem;">
+        <div class="card"><strong>1</strong> Verify tools</div>
+        <div class="card"><strong>2</strong> Configure Git</div>
+        <div class="card"><strong>3</strong> .gitignore</div>
+        <div class="card"><strong>4</strong> git init &amp; commit</div>
+        <div class="card"><strong>5</strong> Push to GitHub</div>
+        <div class="card"><strong>6</strong> MongoDB up</div>
+        <div class="card"><strong>7</strong> Install PM2</div>
+        <div class="card"><strong>8</strong> Self-hosted runner</div>
+        <div class="card"><strong>9</strong> GitHub Secrets</div>
+        <div class="card"><strong>10</strong> PM2 ecosystem</div>
+        <div class="card"><strong>11</strong> deploy.sh</div>
+        <div class="card"><strong>12</strong> Workflow YAML</div>
+        <div class="card"><strong>13</strong> Push &amp; watch</div>
+        <div class="card"><strong>14</strong> Verify apps</div>
+        <div class="card"><strong>15</strong> Survive reboots</div>
+        <div class="card" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(6, 182, 212, 0.15)); border-color: #10b981;"><strong>✓</strong> Done!</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 7 — STEP 1
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">1</div>
+        <div class="step-meta">
+          <div class="tag">Foundation</div>
+          <h2>Verify your tools</h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> A pipeline is just shell commands. If <code>node</code>, <code>npm</code>, <code>git</code>, or <code>mongod</code> aren't on your machine, the pipeline can't run them either.</p>
+<pre><code><span class="token-comment"># Each should print a version number.</span>
+node --version
+npm --version
+git --version
+mongod --version</code></pre>
+      <p class="muted">Required: Node 18+, MongoDB 6+, Git 2.30+.</p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 8 — STEP 2
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">2</div>
+        <div class="step-meta">
+          <div class="tag">Git setup</div>
+          <h2>Configure your identity</h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> Every commit records who made it. Without this, <code>git commit</code> refuses to run, and GitHub can't link commits to your profile.</p>
+<pre><code>git config --global user.name <span class="token-string">"Your Name"</span>
+git config --global user.email <span class="token-string">"you@example.com"</span></code></pre>
+      <p>The email <strong>must match</strong> one registered on your GitHub account — otherwise commits show as a stranger.</p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 9 — STEP 3
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">3</div>
+        <div class="step-meta">
+          <div class="tag danger" style="background: linear-gradient(135deg, #ef4444, #f87171);">Critical</div>
+          <h2>Create a root <code>.gitignore</code></h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> A <code>.env</code> file committed to Git is a permanent leak. Even deleting it later, it stays in history forever. <code>node_modules/</code> is also hundreds of MB of regeneratable junk.</p>
+      <div class="grid-2 stagger">
+        <div>
+          <h3>Always ignore:</h3>
+          <ul class="checks crosses">
+            <li><code>node_modules/</code></li>
+            <li><code>dist/</code></li>
+            <li><code>.env</code> and <code>.env.local</code></li>
+            <li><code>*.log</code></li>
+            <li><code>actions-runner/</code></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Safe to commit:</h3>
+          <ul class="checks">
+            <li><code>.env.example</code> (placeholders, no secrets)</li>
+            <li>Source code</li>
+            <li><code>package.json</code> + <code>package-lock.json</code></li>
+            <li>Build configs</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 10 — STEP 4
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">4</div>
+        <div class="step-meta">
+          <div class="tag">Git</div>
+          <h2>Initialise the repository</h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> Until you run <code>git init</code>, Git has no idea this folder exists. After this, every change is trackable, undoable, and shareable.</p>
+<pre><code>git init -b main             <span class="token-comment"># create repo, branch = main</span>
+git add .                    <span class="token-comment"># stage all (gitignored files skipped)</span>
+git status                   <span class="token-comment"># sanity check — no .env, no node_modules</span>
+git commit -m <span class="token-string">"Initial commit"</span></code></pre>
+      <p>Three states of every file in Git:</p>
+      <div class="flow stagger">
+        <div class="flow-node">Working dir</div><span class="flow-arrow">→</span>
+        <div class="flow-node">Staged</div><span class="flow-arrow">→</span>
+        <div class="flow-node">Committed</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 11 — STEP 5
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">5</div>
+        <div class="step-meta">
+          <div class="tag">GitHub</div>
+          <h2>Push to GitHub</h2>
+        </div>
+      </div>
+      <div class="grid-2 stagger">
+        <div>
+          <h3>1. Create repo on GitHub</h3>
+          <ul class="checks">
+            <li>New repository</li>
+            <li><strong>Leave all "Initialize with..." boxes unchecked</strong></li>
+            <li>Copy the HTTPS URL</li>
+          </ul>
+          <h3 style="margin-top: 1.5rem;">2. Generate Personal Access Token</h3>
+          <ul class="checks">
+            <li>Settings → Developer settings → Tokens (classic)</li>
+            <li>Scopes: <code>repo</code> + <code>workflow</code></li>
+            <li>Copy once — never visible again</li>
+          </ul>
+        </div>
+        <div>
+          <h3>3. Connect &amp; push</h3>
+<pre><code>git remote add origin \
+  https://github.com/you/repo.git
+
+git push -u origin main
+<span class="token-comment"># username: your GitHub login
+# password: paste the PAT (not your account password)</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 12 — STEP 6
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">6</div>
+        <div class="step-meta">
+          <div class="tag">Database</div>
+          <h2>Confirm MongoDB is running</h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> Installed ≠ running. The backend exits immediately if it can't reach Mongo on port 27017.</p>
+<pre><code>systemctl status mongod              <span class="token-comment"># is it running?</span>
+sudo systemctl start mongod          <span class="token-comment"># start if needed</span>
+sudo systemctl enable mongod         <span class="token-comment"># auto-start on boot</span></code></pre>
+      <p>Look for two signals in <code>systemctl status</code>:</p>
+      <ul class="checks">
+        <li><strong>Loaded: ... enabled</strong> — will auto-start on boot</li>
+        <li><strong>Active: active (running)</strong> — running right now</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 13 — STEP 7
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">7</div>
+        <div class="step-meta">
+          <div class="tag">Process manager</div>
+          <h2>Install PM2 globally</h2>
+        </div>
+      </div>
+      <p>PM2 keeps your Node apps alive in the background, restarts them on crash, and survives reboots.</p>
+<pre><code>sudo npm install -g pm2</code></pre>
+      <div class="grid-3 stagger" style="margin-top: 1.5rem;">
+        <div class="card"><h4>Stays alive</h4><p>Close the terminal, app keeps running.</p></div>
+        <div class="card"><h4>Auto-restarts</h4><p>Crash? PM2 brings it back instantly.</p></div>
+        <div class="card"><h4>Multi-app</h4><p>Manages backend + frontend from one config file.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 14 — STEP 8
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">8</div>
+        <div class="step-meta">
+          <div class="tag" style="background: linear-gradient(135deg, #f59e0b, #ef4444);">The big one</div>
+          <h2>Self-hosted GitHub Actions runner</h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> A self-hosted runner is a tiny program on <em>your machine</em> that polls GitHub for jobs. It's what lets the pipeline run commands locally — installing the apps where you want them.</p>
+      <div class="flow stagger">
+        <div class="flow-node">Your repo</div><span class="flow-arrow">→</span>
+        <div class="flow-node">GitHub</div><span class="flow-arrow">→</span>
+        <div class="flow-node">Runner (your machine)</div><span class="flow-arrow">→</span>
+        <div class="flow-node">Run commands</div>
+      </div>
+      <h3 style="margin-top: 1.5rem;">Install as a 4-part flow:</h3>
+      <div class="grid-4 stagger">
+        <div class="card"><strong>8A</strong><br>Get token from GitHub</div>
+        <div class="card"><strong>8B</strong><br>Download &amp; extract runner</div>
+        <div class="card"><strong>8C</strong><br><code>./config.sh</code> register</div>
+        <div class="card"><strong>8D</strong><br><code>sudo ./svc.sh install</code></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 15 — STEP 9
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">9</div>
+        <div class="step-meta">
+          <div class="tag">Secrets</div>
+          <h2>Store secrets in GitHub</h2>
+        </div>
+      </div>
+      <p><strong>Why:</strong> We never commit <code>.env</code> to Git. But the pipeline needs those values to deploy. <strong>GitHub Secrets</strong> = encrypted env vars, auto-masked in logs.</p>
+      <table class="stagger">
+        <tr><th>Name</th><th>Value</th><th>Purpose</th></tr>
+        <tr><td><code>MONGO_URI</code></td><td><code>mongodb://127.0.0.1:27017/...</code></td><td>DB connection</td></tr>
+        <tr><td><code>JWT_SECRET</code></td><td><code>openssl rand -hex 32</code></td><td>Sign login tokens</td></tr>
+        <tr><td><code>JWT_EXPIRES_IN</code></td><td><code>1d</code></td><td>Token lifetime</td></tr>
+        <tr><td><code>BACKEND_PORT</code></td><td><code>5050</code></td><td>API port</td></tr>
+      </table>
+      <p class="muted">Once saved, values are <strong>write-only</strong> — even you can't read them back. That's by design.</p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 16 — STEP 10
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">10</div>
+        <div class="step-meta">
+          <div class="tag">PM2 config</div>
+          <h2>The ecosystem file</h2>
+        </div>
+      </div>
+      <p>One file describing both apps for PM2:</p>
+<pre><code><span class="token-keyword">module.exports</span> = {
+  apps: [
+    {
+      name: <span class="token-string">'todo-backend'</span>,
+      cwd: <span class="token-string">'./node'</span>,
+      script: <span class="token-string">'dist/server.js'</span>,
+      autorestart: <span class="token-keyword">true</span>,
+      max_memory_restart: <span class="token-string">'300M'</span>,
+      env: { NODE_ENV: <span class="token-string">'production'</span> }
+    },
+    {
+      name: <span class="token-string">'todo-frontend'</span>,
+      cwd: <span class="token-string">'./react'</span>,
+      script: <span class="token-string">'/usr/bin/serve'</span>,
+      args: <span class="token-string">'-s dist -l 5173'</span>,
+      interpreter: <span class="token-string">'none'</span>,
+      autorestart: <span class="token-keyword">true</span>
+    }
+  ]
+};</code></pre>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 17 — STEP 11
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">11</div>
+        <div class="step-meta">
+          <div class="tag">Automation</div>
+          <h2>The deploy script</h2>
+        </div>
+      </div>
+      <p><code>deploy/deploy.sh</code> runs on every push. Plain bash — portable to any CI system.</p>
+<pre><code><span class="token-comment">#!/usr/bin/env bash</span>
+<span class="token-fn">set</span> -euo pipefail            <span class="token-comment"># exit on any error</span>
+
+<span class="token-comment"># 1. Write .env from secrets passed in by the workflow</span>
+<span class="token-fn">cat</span> &gt; node/.env &lt;&lt;EOF
+MONGO_URI=${MONGO_URI}
+JWT_SECRET=${JWT_SECRET}
+EOF
+
+<span class="token-comment"># 2. Build both apps</span>
+(<span class="token-fn">cd</span> node  &amp;&amp; npm ci &amp;&amp; npm run build)
+(<span class="token-fn">cd</span> react &amp;&amp; npm ci &amp;&amp; npm run build)
+
+<span class="token-comment"># 3. Reload PM2</span>
+pm2 startOrReload deploy/ecosystem.config.cjs --update-env
+pm2 save</code></pre>
+      <p>Don't forget: <code>chmod +x deploy/deploy.sh</code></p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 18 — STEP 12
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">12</div>
+        <div class="step-meta">
+          <div class="tag">The pipeline</div>
+          <h2>GitHub Actions workflow</h2>
+        </div>
+      </div>
+      <p><code>.github/workflows/ci-cd.yml</code> — two jobs, one fails-fast pattern.</p>
+<pre><code><span class="token-keyword">on:</span>
+  push:
+    branches: [main]
+
+jobs:
+  <span class="token-fn">build-test:</span>
+    runs-on: ubuntu-latest      <span class="token-comment"># cloud VM, free</span>
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci &amp;&amp; npm run typecheck &amp;&amp; npm run build
+
+  <span class="token-fn">deploy:</span>
+    needs: build-test            <span class="token-comment"># only runs if build-test passes</span>
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: bash deploy/deploy.sh</code></pre>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 19 — STEP 13
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">13</div>
+        <div class="step-meta">
+          <div class="tag success">First run</div>
+          <h2>Push &amp; watch it run</h2>
+        </div>
+      </div>
+<pre><code>git add .
+git commit -m <span class="token-string">"Add CI/CD pipeline"</span>
+git push</code></pre>
+      <p>Then open <strong>github.com/yourname/yourrepo/actions</strong>.</p>
+      <div class="flow stagger">
+        <div class="flow-node" style="border-color: #f59e0b;">🟡 Queued</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node" style="border-color: #f59e0b;">🟡 Building</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node" style="border-color: #10b981;">✅ Build OK</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node" style="border-color: #f59e0b;">🟡 Deploying</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-node" style="border-color: #10b981;">✅ Done!</div>
+      </div>
+      <p class="muted" style="margin-top: 1.5rem;">First run is slow (3–5 min, no cache). Subsequent runs ~1 min.</p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 20 — STEP 14
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">14</div>
+        <div class="step-meta">
+          <div class="tag">Sanity check</div>
+          <h2>Verify the deployed apps</h2>
+        </div>
+      </div>
+<pre><code>pm2 list                              <span class="token-comment"># both apps online?</span>
+
+curl http://localhost:5050/           <span class="token-comment"># {"message":"Todo API is running"}</span>
+curl -I http://localhost:5173/        <span class="token-comment"># HTTP/1.1 200 OK</span></code></pre>
+      <p>Then open <strong>http://localhost:5173/</strong> in a browser — your app loads, sign up, create a todo. End-to-end working.</p>
+      <p class="muted">If <code>pm2 list</code> shows status=online but PID=N/A → PM2 couldn't find a binary. Fix the <code>script:</code> path to an absolute path.</p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 21 — STEP 15
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="step-header">
+        <div class="step-num">15</div>
+        <div class="step-meta">
+          <div class="tag">Resilience</div>
+          <h2>Survive reboots</h2>
+        </div>
+      </div>
+      <p>Without this, rebooting your laptop = all apps dead. PM2 ships a helper that registers it as a systemd service.</p>
+<pre><code>pm2 startup
+<span class="token-comment"># PM2 prints a "sudo env PATH=... pm2 startup systemd ..." line.
+# Copy that exact line and run it.</span>
+
+pm2 save        <span class="token-comment"># freeze current process list for resurrect</span></code></pre>
+      <p>Now the boot order is:</p>
+      <div class="flow stagger">
+        <div class="flow-node">Boot</div><span class="flow-arrow">→</span>
+        <div class="flow-node">systemd</div><span class="flow-arrow">→</span>
+        <div class="flow-node">MongoDB</div><span class="flow-arrow">→</span>
+        <div class="flow-node">Runner</div><span class="flow-arrow">→</span>
+        <div class="flow-node">PM2 → apps</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 22 — VERIFICATION LOOP
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag success">End-to-end test</div>
+      <h2>Prove it really works</h2>
+      <p>Make any trivial code change. Push. Watch the magic.</p>
+<pre><code><span class="token-comment"># Change the API homepage response, for example:</span>
+sed -i <span class="token-string">'s/Todo API is running/Todo API v2/'</span> node/server.ts
+
+git add node/server.ts
+git commit -m <span class="token-string">"Test: trivial change"</span>
+git push</code></pre>
+      <div class="grid-3 stagger" style="margin-top: 2rem;">
+        <div class="card"><div class="card-icon" style="background:#10b981;">1</div><h4>Actions tab</h4><p>New run appears within seconds</p></div>
+        <div class="card"><div class="card-icon" style="background:#10b981;">2</div><h4>Both jobs go ✅</h4><p>Build → Deploy in ~1 min</p></div>
+        <div class="card"><div class="card-icon" style="background:#10b981;">3</div><h4>curl returns new text</h4><p>The change is live, automatically</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 23 — REAL SERVER
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag">Next step</div>
+      <h2>Moving to a real server</h2>
+      <p>The same pipeline works on a cloud VM with minimal changes:</p>
+      <table class="stagger">
+        <tr><th>Stays the same</th><th>What changes</th></tr>
+        <tr><td>Workflow YAML</td><td>Provision a Linux VM</td></tr>
+        <tr><td>deploy.sh</td><td>Install Node + PM2 + serve on it</td></tr>
+        <tr><td>ecosystem.config.cjs</td><td>Register a new runner on the VM</td></tr>
+        <tr><td>GitHub Secrets pattern</td><td>Switch MongoDB to Atlas (recommended)</td></tr>
+        <tr><td>PM2 logic</td><td>Add nginx + HTTPS via certbot</td></tr>
+      </table>
+      <p class="muted">Same files. Same logic. Different server. → See <code>DEPLOY_TO_REAL_SERVER.md</code>.</p>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 24 — RECAP
+       ======================================================== -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="tag success">What we built</div>
+      <h2>You now have...</h2>
+      <ul class="checks stagger" style="font-size: 1.15rem;">
+        <li>A <strong>two-job CI/CD pipeline</strong> with fail-fast guarantee</li>
+        <li>A <strong>self-hosted runner</strong> that deploys to your machine on every push</li>
+        <li><strong>Secret management</strong> via GitHub Secrets — no <code>.env</code> in Git ever</li>
+        <li>A <strong>self-healing app stack</strong> — auto-restart on crash, auto-start on boot</li>
+        <li>A <strong>portable setup</strong> — same files work on any Linux server later</li>
+        <li>Full <strong>presentation-ready documentation</strong> in <code>docs/</code></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       SLIDE 25 — THANK YOU
+       ======================================================== -->
+  <section class="slide title-slide">
+    <div class="glow-orb"></div>
+    <div class="glow-orb"></div>
+    <div class="slide-inner">
+      <div class="big-emoji">🚀</div>
+      <h1>Thank you.</h1>
+      <p class="subtitle">Questions?</p>
+      <p class="muted" style="margin-top: 2rem;">Code &amp; docs: <code>github.com/vinaychandwada/learning-cicd-todo</code></p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  const progress = document.getElementById('progress');
+  const currentEl = document.getElementById('current');
+  const totalEl = document.getElementById('total');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  let current = 0;
+
+  totalEl.textContent = total;
+
+  function show(i) {
+    if (i < 0 || i >= total) return;
+    slides[current].classList.remove('active');
+    slides[current].classList.add('prev');
+    current = i;
+    slides[current].classList.add('active');
+    slides[current].classList.remove('prev');
+    // Reset stagger animations
+    const stagger = slides[current].querySelector('.stagger');
+    if (stagger) {
+      stagger.style.animation = 'none';
+      void stagger.offsetWidth;
+      stagger.style.animation = '';
+    }
+    progress.style.width = ((i + 1) / total * 100) + '%';
+    currentEl.textContent = i + 1;
+    prevBtn.disabled = i === 0;
+    nextBtn.disabled = i === total - 1;
+  }
+
+  function next() { if (current < total - 1) show(current + 1); }
+  function prev() { if (current > 0) show(current - 1); }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+      e.preventDefault();
+      next();
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault();
+      prev();
+    } else if (e.key === 'Home') {
+      show(0);
+    } else if (e.key === 'End') {
+      show(total - 1);
+    } else if (e.key === 'f' || e.key === 'F') {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+      } else {
+        document.exitFullscreen();
+      }
+    } else if (/^[0-9]$/.test(e.key)) {
+      // Quick-jump: 1 -> slide 1, 9 -> slide 9
+      const target = parseInt(e.key, 10) - 1;
+      if (target >= 0 && target < total) show(target);
+    }
+  });
+
+  prevBtn.addEventListener('click', prev);
+  nextBtn.addEventListener('click', next);
+
+  // Swipe for mobile
+  let touchStart = 0;
+  document.addEventListener('touchstart', (e) => { touchStart = e.touches[0].clientX; });
+  document.addEventListener('touchend', (e) => {
+    const dx = e.changedTouches[0].clientX - touchStart;
+    if (Math.abs(dx) > 50) {
+      if (dx < 0) next(); else prev();
+    }
+  });
+
+  // Init
+  progress.style.width = (1 / total * 100) + '%';
+  prevBtn.disabled = true;
+</script>
+
+</body>
+</html>
